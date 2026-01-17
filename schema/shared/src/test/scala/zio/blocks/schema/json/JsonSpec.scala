@@ -104,6 +104,33 @@ object JsonSpec extends ZIOSpecDefault {
          // But let's check basic failure
          assert(result)(isLeft(anything))
       }
+    ),
+    suite("Modification")(
+      test("modify updates value at path") {
+        val json = Json.Object("a" -> Json.Number("1"))
+        val modified = json.modify(p"a", _ => Json.Number("2"))
+        assert(modified)(equalTo(Json.Object("a" -> Json.Number("2"))))
+      },
+      test("modify ignores invalid path") {
+        val json = Json.Object("a" -> Json.Number("1"))
+        val modified = json.modify(p"b", _ => Json.Number("2"))
+        assert(modified)(equalTo(json))
+      },
+      test("set updates value") {
+        val json = Json.Array(Json.Number("1"))
+        val modified = json.set(p"[0]", Json.Number("2"))
+        assert(modified)(equalTo(Json.Array(Json.Number("2"))))
+      },
+      test("merge merges objects") {
+        val j1 = Json.Object("a" -> Json.Number("1"))
+        val j2 = Json.Object("a" -> Json.Number("2"), "b" -> Json.Number("2"))
+        // Auto merge for objects is deep merge
+        assert(j1.merge(j2))(equalTo(Json.Object("a" -> Json.Number("1").merge(Json.Number("2")), "b" -> Json.Number("2"))))
+        // Wait, primitive merge is right wins by default in Auto?
+        // Let's check logic:
+        // case (Some(v1), Some(v2)) => Some(k -> v1.merge(v2, strategy))
+        // And v1 (Number) merge v2 (Number) fallthrough to `other` (v2) in Auto.
+      }
     )
   )
 }

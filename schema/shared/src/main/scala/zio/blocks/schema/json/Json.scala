@@ -297,6 +297,83 @@ sealed trait Json { self =>
 
   def apply(path: DynamicOptic): JsonSelection = get(path)
 
+  def modify(path: DynamicOptic, f: Json => Json): Json = {
+    def go(current: Json, nodes: List[DynamicOptic.Node]): Json = nodes match {
+      case Nil => f(current)
+      case head :: tail => current match {
+        case Json.Object(fields) =>
+          head match {
+            case DynamicOptic.Node.Field(name) =>
+              Json.Object(fields.map { 
+                case (k, v) if k == name => (k, go(v, tail))
+                case other => other
+              })
+            case _ => current
+          }
+        case Json.Array(elements) =>
+          head match {
+            case DynamicOptic.Node.AtIndex(idx) =>
+              if (idx >= 0 && idx < elements.size)
+                Json.Array(elements.updated(idx, go(elements(idx), tail)))
+              else current
+            case DynamicOptic.Node.Elements =>
+              Json.Array(elements.map(e => go(e, tail)))
+            case _ => current
+          }
+        case _ => current
+      }
+    }
+    go(self, path.nodes.toList)
+  }
+
+  def set(path: DynamicOptic, value: Json): Json = modify(path, _ => value)
+
+  def merge(other: Json, strategy: MergeStrategy = MergeStrategy.Auto): Json = {
+    def mergeObjects(o1: Vector[(String, Json)], o2: Vector[(String, Json)]): Vector[(String, Json)] = {
+      val m1 = o1.toMap
+      val keys = (o1.map(_._1) ++ o2.map(_._1)).distinct
+      keys.flatMap { k =>
+        (m1.get(k), o2.collectFirst { case (nk, nv) if nk == k => nv }) match {
+          case (Some(v1), Some(v2)) => Some(k -> v1.merge(v2, strategy))
+          case (Some(v1), None)     => Some(k -> v1)
+          case (None, Some(v2))     => Some(k -> v2)
+          case _                    => None
+        }
+      }.toVector
+    }
+
+    strategy match {
+      case MergeStrategy.Replace => other
+      case MergeStrategy.Concat =>
+        (self, other) match {
+          case (Json.Array(a), Json.Array(b)) => Json.Array(a ++ b)
+          case _                              => other
+        }
+      case MergeStrategy.Shallow =>
+        (self, other) match {
+          case (Json.Object(f1), Json.Object(f2)) => 
+             val f2Map = f2.toMap
+             val f1Filtered = f1.filterNot(p => f2Map.contains(p._1))
+             Json.Object(f1Filtered ++ f2)
+          case _ => other
+        }
+      case MergeStrategy.Deep =>
+        (self, other) match {
+          case (Json.Object(f1), Json.Object(f2)) => Json.Object(mergeObjects(f1, f2))
+          case (Json.Array(a), Json.Array(b))     => Json.Array(a ++ b)
+          case _                                  => other
+        }
+      case MergeStrategy.Auto =>
+        (self, other) match {
+          case (Json.Object(f1), Json.Object(f2)) => Json.Object(mergeObjects(f1, f2))
+          case (Json.Array(a), Json.Array(b))     => Json.Array(a ++ b)
+          case _                                  => other
+        }
+      case MergeStrategy.Custom(f) =>
+        f(DynamicOptic.root, self, other)
+    }
+  }
+
   def apply(index: Int): JsonSelection = self match {
     case Json.Array(elems) if index >= 0 && index < elems.size =>
       JsonSelection(elems(index))
